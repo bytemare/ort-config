@@ -1,0 +1,10 @@
+- id: "Go::golang.org/x/sys:"
+  curations:
+    comment: |
+      ScanCode detects LicenseRef-scancode-proprietary-license (false positive from
+      boilerplate text) and LicenseRef-scancode-google-patent-license-golang (from the
+      PATENTS file). The package is BSD-3-Clause licensed. The PATENTS file is an
+      additional patent grant supplementing BSD-3-Clause, not a restrictive license.
+      See https://cs.opensource.google/go/x/sys/+/master:LICENSE
+      See https://cs.opensource.google/go/x/sys/+/master:PATENTS
+    concluded_license: "BSD-3-Clause"
