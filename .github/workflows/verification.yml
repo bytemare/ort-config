@@ -1,0 +1,31 @@
+name: Verification
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+  verification:
+    runs-on: ubuntu-latest
+    env:
+      GRADLE_OPTS: -Dorg.gradle.daemon=false
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+    - name: Setup Java
+      uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5
+      with:
+        distribution: temurin
+        java-version: 21
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@4d9f0ba0025fe599b4ebab900eb7f3a1d93ef4c2 # v5
+      with:
+        gradle-home-cache-cleanup: true
+    - name: Verify package configurations
+      run: ./gradlew -p tools/curations verifyPackageConfigurations
+    - name: Verify package curations
+      run: ./gradlew -p tools/curations verifyPackageCurations
