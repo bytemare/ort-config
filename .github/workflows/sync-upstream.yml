@@ -1,0 +1,157 @@
+#
+# SPDX-License-Identifier: MIT
+#
+# Copyright (C) 2026 Daniel Bourdrez. All Rights Reserved.
+#
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree or at
+# https://spdx.org/licenses/MIT.html
+#
+
+---
+
+name: Sync upstream ort-config
+
+on:
+  schedule:
+    # Daily at 06:00 UTC
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      upstream_url:
+        description: "Upstream repository URL"
+        required: false
+        type: string
+        default: "https://github.com/oss-review-toolkit/ort-config.git"
+      upstream_branch:
+        description: "Upstream branch to sync from"
+        required: false
+        type: string
+        default: "main"
+      auto_merge:
+        description: "Enable auto-merge for clean merges"
+        required: false
+        type: boolean
+        default: true
+      update_branch:
+        description: "The branch to use for syncing (will be created if it doesn't exist)"
+        required: false
+        type: string
+        default: "sync/upstream-ort-config"
+
+permissions: {}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@fe104658747b27e96e4f7e80cd0a94068e53901d
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream and sync
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM_URL: ${{ inputs.upstream_url }}
+          UPSTREAM_BRANCH: ${{ inputs.upstream_branch }}
+          SYNC_BRANCH: ${{ inputs.update_branch }}
+          AUTO_MERGE: ${{ inputs.auto_merge == '' && 'true' || inputs.auto_merge }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Configure git identity for the merge commit
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Register the "ours" merge driver so .gitattributes entries
+          # (README.md, .github/CODEOWNERS) always keep our local version.
+          git config merge.ours.driver true
+
+          # Add upstream remote if not present
+          if ! git remote get-url upstream &>/dev/null; then
+            git remote add upstream "$UPSTREAM_URL"
+          fi
+
+          git fetch upstream "$UPSTREAM_BRANCH" --quiet
+
+          # Check if there are new commits
+          LOCAL_MERGE_BASE=$(git merge-base HEAD "upstream/$UPSTREAM_BRANCH" 2>/dev/null || echo "none")
+          UPSTREAM_HEAD=$(git rev-parse "upstream/$UPSTREAM_BRANCH")
+
+          if [[ "$LOCAL_MERGE_BASE" == "$UPSTREAM_HEAD" ]]; then
+            echo "Already up to date with upstream."
+            exit 0
+          fi
+
+          echo "Upstream has new commits (merge-base: ${LOCAL_MERGE_BASE:0:12}, upstream HEAD: ${UPSTREAM_HEAD:0:12})"
+
+          # Create or reset the sync branch
+          git checkout -B "$SYNC_BRANCH" HEAD
+
+          # Attempt merge on the sync branch.
+          # .gitattributes merge=ours protects README.md and CODEOWNERS.
+          # Custom curations are in new files not present upstream, so no conflict.
+          CLEAN_MERGE=true
+          if git merge "upstream/$UPSTREAM_BRANCH" --signoff --no-edit -m "chore: sync upstream ort-config
+
+          Merge $UPSTREAM_URL $UPSTREAM_BRANCH at ${UPSTREAM_HEAD:0:12}.
+
+          Co-authored-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"; then
+            BODY="Automated merge of upstream [ort-config]($UPSTREAM_URL) (\`$UPSTREAM_BRANCH\`).
+
+          **Upstream HEAD:** \`$UPSTREAM_HEAD\`
+
+          Files protected from overwrite (\`.gitattributes merge=ours\`): \`README.md\`, \`.github/CODEOWNERS\`.
+          Custom curations in \`curations/Go/_/golang.org%2Fx%2F*\` are in new files and are unaffected."
+            TITLE="chore: sync upstream ort-config"
+          else
+            # Conflict in a non-protected file. Commit conflict markers for visibility.
+            CLEAN_MERGE=false
+            git add -A
+            git commit --no-edit --signoff --allow-empty -m "chore: sync upstream ort-config (conflicts)
+
+          Merge $UPSTREAM_URL $UPSTREAM_BRANCH at ${UPSTREAM_HEAD:0:12}.
+          This merge has conflicts that must be resolved manually." || true
+            BODY="⚠️ **Merge conflicts detected** — manual resolution required.
+
+          Automated merge of upstream [ort-config]($UPSTREAM_URL) (\`$UPSTREAM_BRANCH\`).
+
+          **Upstream HEAD:** \`$UPSTREAM_HEAD\`
+
+          Files protected from overwrite (\`.gitattributes merge=ours\`): \`README.md\`, \`.github/CODEOWNERS\`.
+          Custom curations in \`curations/Go/_/golang.org%2Fx%2F*\` are in new files and should not conflict.
+
+          Please resolve the remaining conflicts."
+            TITLE="chore: sync upstream ort-config (conflicts)"
+          fi
+
+          git push origin "$SYNC_BRANCH" --force
+
+          # Create or update PR
+          EXISTING_PR=$(gh pr list --head "$SYNC_BRANCH" --json number --jq '.[0].number // empty')
+          if [[ -n "$EXISTING_PR" ]]; then
+            echo "Updating existing PR #$EXISTING_PR"
+            gh pr edit "$EXISTING_PR" --title "$TITLE" --body "$BODY"
+          else
+            gh pr create \
+              --title "$TITLE" \
+              --body "$BODY" \
+              --head "$SYNC_BRANCH" \
+              --base main
+          fi
+
+          # Enable auto-merge for clean merges so the PR merges once checks pass.
+          if [[ "$CLEAN_MERGE" == "true" && "$AUTO_MERGE" == "true" ]]; then
+            EXISTING_PR=$(gh pr list --head "$SYNC_BRANCH" --json number --jq '.[0].number')
+            echo "Enabling auto-merge for PR #$EXISTING_PR"
+            gh pr merge "$EXISTING_PR" --auto --merge
+          fi
